@@ -1,3 +1,5 @@
+import { MINIAPP_URL } from '$env/static/private'
+import { decrypt } from '$server/auth.js'
 let lastReqTime = 0
 let lastPrice = 0
 
@@ -21,13 +23,16 @@ export const load = async ({ fetch, locals, url }) => {
 	lastReqTime = Date.now()
 	lastPrice = res.result.ethusd
 
+	const x = url.searchParams.get('x')
 	return {
 		stuff: 'some',
 		ETHUSD: lastPrice,
 		gatheringWallet: sageWalletAddress,
 		walletAddress,
 		poolIndex,
-		name
+		name,
+		x: JSON.parse(await decrypt(x)),
+		MiniApp_URL: MINIAPP_URL
 		// telegramID: locals.telegramID,
 		// telegramUsername: locals.telegramUsername,
 		// xUsername: locals.xUsername ? locals.xUsername : undefined
