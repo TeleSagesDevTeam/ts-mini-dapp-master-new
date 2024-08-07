@@ -66,7 +66,7 @@ export const load = async ({ locals, url }) => {
 
 // 							const saveUser = await pb.collection('Users').create(user)
 // 							if(saveUser && saveUser.id) {
-// 								throw redirect(307, 'https://t.me/telesages_seed_bot/dashboard?startapp=linked')
+// 								throw redirect(307, 'https://t.me/telesages_bot/dashboard?startapp=linked')
 // 							}
 
 // 						} catch(saveToDBerror) {
