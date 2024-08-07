@@ -1,0 +1,263 @@
+// https://github.com/softwarecurator/svelte-wagmi
+
+import { writable, get } from 'svelte/store'
+import {
+	createConfig,
+	configureChains,
+	getAccount,
+	watchAccount,
+	disconnect,
+	getNetwork,
+	connect,
+	watchNetwork,
+} from '@wagmi/core'
+
+import { arbitrumGoerli } from '@wagmi/core/chains'
+import { publicProvider } from '@wagmi/core/providers/public'
+import { InjectedConnector } from '@wagmi/core/connectors/injected'
+import { EthereumClient, w3mProvider } from '@web3modal/ethereum'
+import { infuraProvider } from '@wagmi/core/providers/infura'
+import { jsonRpcProvider } from '@wagmi/core/providers/jsonRpc'
+
+export const connected = writable(false)
+export const wagmiLoaded = writable(false)
+export const chainId = writable(null)
+export const signerAddress = writable(null)
+export const configuredConnectors = writable([])
+export const loading = writable(true)
+
+// interface IOptions {
+// 	walletconnect?: boolean;
+// 	walletconnectProjectID?: string;
+// 	alchemyKey?: string | null;
+// 	autoConnect?: boolean;
+// }
+
+// type DefaultConnectorsProps = {
+// 	chains?: Chain[];
+// 	app: {
+// 		name: string;
+// 		icon?: string;
+// 		description?: string;
+// 		url?: string;
+// 	};
+// 	walletConnectProjectId: string;
+// 	alchemyId: string;
+// };
+
+// type DefaultConfigProps = {
+// 	appName: string;
+// 	appIcon?: string;
+// 	appDescription?: string;
+// 	appUrl?: string;
+// 	autoConnect?: boolean;
+// 	alchemyId: string;
+// 	infuraId?: string;
+// 	chains?: Chain[];
+// 	connectors?: any;
+// 	publicClient?: any;
+// 	webSocketPublicClient?: any;
+// 	enableWebSocketPublicClient?: boolean;
+// 	stallTimeout?: number;
+// 	walletConnectProjectId: string;
+// };
+
+const defaultChains = [arbitrumGoerli]
+
+const getDefaultConnectors = ({
+	chains,
+	app,
+}) => {
+	const hasAllAppData = app.name && app.icon && app.description && app.url;
+	let defaultConnectors = []
+	defaultConnectors = [
+		...defaultConnectors,
+		new InjectedConnector({
+			chains,
+			options: {
+				name: detectedName =>
+					`Injected (${typeof detectedName === 'string' ? detectedName : detectedName.join(', ')})`
+			}
+		})
+	]
+
+	configuredConnectors.set(defaultConnectors)
+	return defaultConnectors
+}
+
+/** Deprecated **/
+export const configureWagmi = async (options={}) => {
+	const providers = [publicProvider()]
+	if(options.alchemyKey) providers.push(alchemyProvider({ apiKey: options.alchemyKey }))
+
+	const { chains, publicClient, webSocketPublicClient } = configureChains(defaultChains, providers)
+	const connectors = [new InjectedConnector({ chains })]
+
+	const wagmiClient = createConfig({
+		autoConnect: options.autoConnect ?? true,
+		webSocketPublicClient,
+		publicClient,
+		connectors
+	})
+
+	wagmiLoaded.set(true)
+	await init()
+};
+
+export const defaultConfig = ({
+	autoConnect = true,
+	appName = 'Erc.Kit',
+	appIcon,
+	appDescription,
+	appUrl,
+	chains = defaultChains,
+	alchemyId,
+	infuraId,
+	connectors,
+	publicClient,
+	stallTimeout,
+}) => {
+	const providers = []
+
+	if(infuraId) {
+		providers.push(infuraProvider({ apiKey: infuraId }));
+	}
+	providers.push(
+		jsonRpcProvider({
+			rpc: c => {
+				return { http: c.rpcUrls.default.http[0] };
+			}
+		})
+	);
+
+	providers.push(publicProvider())
+	const {
+		publicClient: configuredPublicClient,
+		chains: configuredChains,
+		webSocketPublicClient: configuredWebSocketPublicClient
+	} = configureChains(chains, providers, { stallTimeout })
+
+	if(connectors) configuredConnectors.set(connectors)
+
+	const ercClient = createConfig({
+		autoConnect,
+		publicClient: publicClient ?? configuredPublicClient,
+		webSocketPublicClient: configuredWebSocketPublicClient,
+		connectors:
+			connectors ??
+			getDefaultConnectors({
+				chains: configuredChains,
+				app: {
+					name: appName,
+					icon: appIcon,
+					description: appDescription,
+					url: appUrl
+				},
+				alchemyId
+			})
+	})
+
+	const ethereumClient = new EthereumClient(ercClient, configuredChains)
+
+	wagmiLoaded.set(true)
+
+	return { init }
+}
+
+export const init = async () => {
+	try {
+		setupListeners()
+		const account = await waitForConnection()
+
+		if(account.address) {
+			const network = getNetwork()
+			if (network.chain) chainId.set(network.chain.id)
+			connected.set(true)
+			signerAddress.set(account.address)
+		}
+		loading.set(false)
+	} catch(err) {
+		loading.set(false)
+	}
+}
+
+const setupListeners = () => {
+	watchAccount(handleAccountChange)
+	watchNetwork(handleNetworkChange)
+}
+
+const handleAccountChange = async account => {
+	if(get(wagmiLoaded) && account.address) {
+		const chain = getNetwork()
+
+		chainId.set(chain.chain.id)
+		connected.set(true)
+		loading.set(false)
+		signerAddress.set(account.address)
+	} else if(account.isDisconnected && get(connected)) {
+		loading.set(false)
+		await disconnectWagmi()
+	}
+};
+
+const handleNetworkChange = network => {
+	if(network.chain) chainId.set(network.chain.id)
+}
+
+export const connection = async () => {
+	try {
+		const connector = getConnectorbyID('injected')
+		if(connector !== null) {
+			await connect({ connector })
+		}
+		return { success: true }
+	} catch(err) {
+		return { success: false }
+	}
+}
+
+export const disconnectWagmi = async () => {
+	await disconnect()
+	connected.set(false)
+	chainId.set(null)
+	signerAddress.set(null)
+	loading.set(false)
+};
+
+const waitForAccount = () => {
+	return new Promise((resolve, reject) => {
+		const unsub = watchAccount((account) => {
+			if (account?.isConnected) {
+				// Gottem, resolve the promise w/user's selected & connected Acc.
+				resolve(account);
+				unsub();
+			} else {
+				console.warn('🔃 - No Account Connected Yet...');
+			}
+		});
+	});
+};
+
+const waitForConnection = () =>
+	new Promise((resolve, reject) => {
+		const attemptToGetAccount = () => {
+			const account = getAccount();
+			if (account.isDisconnected) reject('account is disconnected');
+			if (account.isConnecting) {
+				setTimeout(attemptToGetAccount, 250);
+			} else {
+				resolve(account);
+			}
+		};
+
+		attemptToGetAccount();
+	});
+
+export function getConnectorbyID(id) {
+	for (const obj of get(configuredConnectors)) {
+		if (obj.id === id) {
+			return obj;
+		}
+	}
+	return null;
+}
